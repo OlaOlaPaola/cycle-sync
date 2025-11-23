@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { usePrivySafe } from '../../hooks/usePrivySafe';
 import { useDemoAuth } from '../../contexts/DemoAuthContext';
 import { PRIVY_APP_ID } from '../../config/privy';
+import { useLoginWithEmail, useLoginWithOAuth, useLoginWithTelegram } from '@privy-io/react-auth';
 import styles from './LoginScreen.module.css';
 
 interface LoginScreenProps {
@@ -11,11 +12,16 @@ interface LoginScreenProps {
 }
 
 const LoginScreen = ({ onEmailSubmit, onBack, onBypass }: LoginScreenProps) => {
-  const { login } = usePrivySafe();
+  const { ready, authenticated } = usePrivySafe();
   const { timeRemaining } = useDemoAuth();
   const hasPrivy = PRIVY_APP_ID && PRIVY_APP_ID.trim() !== '';
   const [email, setEmail] = useState('');
   const [showMoreOptions, setShowMoreOptions] = useState(false);
+  
+  // Usar hooks específicos de Privy v3
+  const { sendCode: sendEmailCode, state: emailState } = useLoginWithEmail();
+  const { initOAuth } = useLoginWithOAuth();
+  const { login: loginWithTelegram } = useLoginWithTelegram();
   
   const formatTime = (ms: number | null) => {
     if (!ms) return '';
@@ -42,18 +48,14 @@ const LoginScreen = ({ onEmailSubmit, onBack, onBypass }: LoginScreenProps) => {
       }
       
       try {
-        // Iniciar el proceso de login con Privy
-        // Privy enviará el código automáticamente
-        await (login as any)({
-          method: 'email',
-          email: email,
-        });
-        // Si llegamos aquí, Privy está procesando el código
-        // La pantalla de confirmación se mostrará automáticamente
+        // En Privy v3, usar sendCode para enviar el código OTP
+        await sendEmailCode({ email });
+        // Si llegamos aquí, el código fue enviado exitosamente
+        // Mostrar la pantalla de confirmación
         onEmailSubmit(email);
       } catch (error) {
-        console.error('Error iniciando login con email:', error);
-        // Aún así mostrar la pantalla de confirmación para que el usuario pueda ingresar el código
+        console.error('Error enviando código de verificación:', error);
+        // Aún así mostrar la pantalla de confirmación para que el usuario pueda intentar de nuevo
         onEmailSubmit(email);
       }
     }
@@ -65,9 +67,7 @@ const LoginScreen = ({ onEmailSubmit, onBack, onBypass }: LoginScreenProps) => {
       return;
     }
     try {
-      await (login as any)({
-        method: 'google',
-      });
+      await initOAuth({ provider: 'google' });
     } catch (error) {
       console.error('Error en login con Google:', error);
     }
@@ -79,9 +79,7 @@ const LoginScreen = ({ onEmailSubmit, onBack, onBypass }: LoginScreenProps) => {
       return;
     }
     try {
-      await (login as any)({
-        method: 'telegram',
-      });
+      await loginWithTelegram();
     } catch (error) {
       console.error('Error en login con Telegram:', error);
     }
@@ -93,9 +91,7 @@ const LoginScreen = ({ onEmailSubmit, onBack, onBypass }: LoginScreenProps) => {
       return;
     }
     try {
-      await (login as any)({
-        method: 'apple',
-      });
+      await initOAuth({ provider: 'apple' });
     } catch (error) {
       console.error('Error en login con Apple:', error);
     }

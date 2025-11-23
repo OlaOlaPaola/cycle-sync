@@ -76,6 +76,21 @@
   background: var(--color-input-bg);
 }
 
+.btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.recoveryStatus {
+  margin: var(--spacing-sm) 0 0 0;
+  padding: var(--spacing-sm);
+  border-radius: var(--radius-md);
+  background: var(--color-input-bg);
+  color: var(--color-text);
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+
 .logoutBtn {
   background: var(--color-warning);
   color: white;

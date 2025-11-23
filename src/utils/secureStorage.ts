@@ -7,8 +7,15 @@
 
 import { UserData } from '../types';
 import { encryptUserData, EncryptionInput, EncryptionResult } from './encryption';
-import { uploadToIPFS, IPFSUploadInput } from './ipfs';
+import { uploadToIPFS, IPFSUploadInput, fetchFromIPFS } from './ipfs';
 import { logEncryptionData, validateEncryptionData, analyzeUserDataFields } from './debugEncryption';
+import {
+  saveEncryptedDataToSupabase,
+  updateEncryptedDataInSupabase,
+  getEncryptedDataFromSupabase,
+} from './supabaseStorage';
+import { isSupabaseConfigured } from '../config/supabase';
+import { decryptUserData, DecryptionResult } from './decryption';
 
 /**
  * Interfaz para el resultado del guardado seguro
@@ -17,6 +24,9 @@ export interface SecureStorageResult {
   cid: string;
   size: number;
   aesKey: string; // Esta debe ser cifrada por el backend antes de guardarse
+  iv: string; // IV en base64
+  tag: string; // Tag de autenticación en base64
+  supabaseId?: string; // ID del registro en Supabase (si se guardó)
 }
 
 /**
@@ -74,11 +84,13 @@ export async function saveUserDataSecurely(
 
     const ipfsResult = await uploadToIPFS(ipfsInput);
 
-    // 3. Retornar resultado
+    // 3. Retornar resultado (incluyendo iv y tag para Supabase)
     return {
       cid: ipfsResult.cid,
       size: ipfsResult.size,
       aesKey: encrypted.aesKey, // ⚠️ Esta clave debe ser cifrada por el backend
+      iv: encrypted.iv,
+      tag: encrypted.tag,
     };
   } catch (error) {
     throw new Error(
@@ -141,15 +153,17 @@ export function getIPFSMetadataLocally(userId: string): UserIPFSMetadata | null 
  * @param userData - Datos del usuario
  * @param aiPrompt - Prompt para IA
  * @param saveMetadata - Si true, guarda metadatos en localStorage (default: true)
- * @returns Resultado con CID y tamaño
+ * @param saveToSupabase - Si true, guarda metadatos en Supabase (default: true)
+ * @returns Resultado con CID, tamaño y datos de encriptación
  */
 export async function saveUserDataComplete(
   userId: string,
   userData: UserData,
   aiPrompt: string,
-  saveMetadata: boolean = true
+  saveMetadata: boolean = true,
+  saveToSupabase: boolean = true
 ): Promise<SecureStorageResult> {
-  // 1. Guardar datos de forma segura
+  // 1. Guardar datos de forma segura (encriptar + subir a IPFS)
   const result = await saveUserDataSecurely(userId, userData, aiPrompt);
 
   // 2. Guardar metadatos localmente (si se solicita)
@@ -157,36 +171,151 @@ export async function saveUserDataComplete(
     saveIPFSMetadataLocally(userId, result.cid, result.size);
   }
 
-  // 3. ⚠️ IMPORTANTE: En producción, aquí debes enviar al backend:
-  // await sendToBackend({
-  //   userId,
-  //   ipfsCid: result.cid,
-  //   aesKeyEncrypted: await encryptAESKeyForBackend(result.aesKey),
-  //   size: result.size
-  // });
+  // 3. Guardar metadatos en Supabase (si está configurado y se solicita)
+  if (saveToSupabase && isSupabaseConfigured()) {
+    try {
+      const supabaseResult = await updateEncryptedDataInSupabase(
+        userId, // privyUserId
+        result.cid,
+        result.aesKey,
+        result.iv,
+        result.tag
+      );
+      return {
+        ...result,
+        supabaseId: supabaseResult.id.toString(),
+      };
+    } catch (error) {
+      console.error('⚠️ Error al guardar en Supabase (continuando con localStorage):', error);
+      // Continuar sin fallar si Supabase falla
+    }
+  }
 
   return result;
 }
 
 /**
- * Ejemplo de cómo enviar datos al backend
- * (Esta función debe ser implementada según tu backend)
+ * Obtiene los metadatos de IPFS desde Supabase o localStorage
+ * 
+ * @param userId - ID del usuario (Privy User ID)
+ * @param preferSupabase - Si true, intenta obtener de Supabase primero (default: true)
+ * @returns Metadatos de IPFS o null si no existen
  */
-export async function sendToBackend(metadata: {
-  userId: string;
-  ipfsCid: string;
-  aesKeyEncrypted: string; // Clave AES cifrada por el backend
-  size: number;
-}): Promise<void> {
-  // TODO: Implementar llamada al backend
-  // Ejemplo:
-  // const response = await fetch('/api/user-data', {
-  //   method: 'POST',
-  //   headers: { 'Content-Type': 'application/json' },
-  //   body: JSON.stringify(metadata)
-  // });
-  // if (!response.ok) throw new Error('Error al guardar en backend');
-  
-  console.log('⚠️ Backend no implementado. Datos:', metadata);
+export async function getIPFSMetadata(
+  userId: string,
+  preferSupabase: boolean = true
+): Promise<UserIPFSMetadata | null> {
+  // Intentar obtener de Supabase primero si está configurado
+  if (preferSupabase && isSupabaseConfigured()) {
+    try {
+      const supabaseData = await getEncryptedDataFromSupabase(userId);
+      if (supabaseData) {
+        return {
+          userId: userId,
+          ipfsCid: supabaseData.cid,
+          size: 0, // El schema no tiene size, usar 0 como placeholder
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
+      }
+    } catch (error) {
+      console.warn('⚠️ Error al obtener de Supabase, intentando localStorage:', error);
+    }
+  }
+
+  // Fallback a localStorage
+  return getIPFSMetadataLocally(userId);
+}
+
+/**
+ * Interfaz para el resultado de la recuperación de datos
+ */
+export interface RecoveredDataResult {
+  userData: UserData;
+  aiPrompt: string;
+  cid: string;
+  version: number;
+}
+
+/**
+ * Recupera y desencripta los datos del usuario desde Supabase e IPFS
+ * 
+ * Flujo completo:
+ * 1. Obtiene metadatos de Supabase (cid, aesKey, iv, tag)
+ * 2. Obtiene datos encriptados desde IPFS usando el CID
+ * 3. Desencripta los datos usando los tres valores
+ * 4. Retorna los datos desencriptados
+ * 
+ * @param privyUserId - ID del usuario (Privy User ID)
+ * @returns Datos desencriptados (userData y aiPrompt) o null si no se encuentran
+ */
+export async function recoverUserData(
+  privyUserId: string
+): Promise<RecoveredDataResult | null> {
+  try {
+    // 1. Validar que Supabase esté configurado
+    if (!isSupabaseConfigured()) {
+      console.warn('⚠️ Supabase no está configurado. No se pueden recuperar datos desde Supabase.');
+      return null;
+    }
+
+    // 2. Obtener metadatos de Supabase (cid, aesKey, iv, tag)
+    const metadata = await getEncryptedDataFromSupabase(privyUserId);
+    
+    if (!metadata) {
+      console.warn('⚠️ No se encontraron metadatos en Supabase para el usuario:', privyUserId);
+      return null;
+    }
+
+    console.log('📦 Metadatos obtenidos de Supabase:', {
+      cid: metadata.cid,
+      version: metadata.version,
+      hasAesKey: !!metadata.aesKey,
+      hasIv: !!metadata.iv,
+      hasTag: !!metadata.tag,
+    });
+
+    // 3. Obtener datos encriptados desde IPFS usando el CID
+    console.log('🌐 Obteniendo datos desde IPFS con CID:', metadata.cid);
+    const ipfsData = await fetchFromIPFS(metadata.cid);
+    
+    console.log('✅ Datos obtenidos de IPFS:', {
+      hasCiphertext: !!ipfsData.ciphertext,
+      hasIv: !!ipfsData.iv,
+      hasTag: !!ipfsData.tag,
+    });
+
+    // 4. Desencriptar los datos usando los tres valores
+    console.log('🔓 Desencriptando datos...');
+    const decryptedData: DecryptionResult = await decryptUserData({
+      ciphertext: ipfsData.ciphertext, // Desde IPFS
+      aesKey: metadata.aesKey,         // Desde Supabase
+      iv: metadata.iv,                 // Desde Supabase
+      tag: metadata.tag,               // Desde Supabase
+    });
+
+    // 5. Log de los datos recuperados
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    console.log('✅ RECOVERED DATA:');
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    console.log('User Data:', JSON.stringify(decryptedData.userData, null, 2));
+    console.log('AI Prompt:', decryptedData.aiPrompt);
+    console.log('CID:', metadata.cid);
+    console.log('Version:', metadata.version);
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+
+    // 6. Retornar los datos desencriptados
+    return {
+      userData: decryptedData.userData as UserData,
+      aiPrompt: decryptedData.aiPrompt,
+      cid: metadata.cid,
+      version: metadata.version,
+    };
+  } catch (error) {
+    console.error('❌ Error al recuperar datos del usuario:', error);
+    throw new Error(
+      `Error al recuperar datos: ${error instanceof Error ? error.message : 'Error desconocido'}`
+    );
+  }
 }
 

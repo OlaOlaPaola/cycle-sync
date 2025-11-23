@@ -30,6 +30,15 @@ const PINATA_JWT = import.meta.env.VITE_PINATA_JWT?.trim() || '';
 const PINATA_GATEWAY = import.meta.env.VITE_PINATA_GATEWAY?.trim() || '';
 
 /**
+ * Interfaz para los datos encriptados obtenidos desde IPFS
+ */
+export interface IPFSEncryptedData {
+  ciphertext: string; // base64
+  iv: string; // base64
+  tag: string; // base64
+}
+
+/**
  * Sube un archivo JSON cifrado a IPFS usando Pinata
  * 
  * @param input - Objeto con ciphertext, iv y tag en base64
@@ -98,6 +107,72 @@ export async function uploadToIPFS(
   } catch (error) {
     throw new Error(
       `Error al subir a IPFS: ${error instanceof Error ? error.message : 'Error desconocido'}`
+    );
+  }
+}
+
+/**
+ * Obtiene datos encriptados desde IPFS usando el CID
+ * 
+ * @param cid - Content Identifier (CID) del archivo en IPFS
+ * @returns Datos encriptados (ciphertext, iv, tag)
+ */
+export async function fetchFromIPFS(
+  cid: string
+): Promise<IPFSEncryptedData> {
+  try {
+    // 1. Construir la URL del gateway
+    // Intentar usar el gateway de Pinata si está configurado, sino usar el público
+    const gatewayUrl = PINATA_GATEWAY 
+      ? `${PINATA_GATEWAY.replace(/\/$/, '')}/${cid}`
+      : `https://gateway.pinata.cloud/ipfs/${cid}`;
+    
+    // 2. Hacer fetch del archivo desde IPFS
+    const response = await fetch(gatewayUrl);
+    
+    if (!response.ok) {
+      // Si falla con el gateway de Pinata, intentar con el gateway público de IPFS
+      if (gatewayUrl.includes('pinata.cloud')) {
+        const publicGatewayUrl = `https://ipfs.io/ipfs/${cid}`;
+        const publicResponse = await fetch(publicGatewayUrl);
+        
+        if (!publicResponse.ok) {
+          throw new Error(
+            `Error al obtener datos de IPFS: HTTP ${publicResponse.status} - ${publicResponse.statusText}`
+          );
+        }
+        
+        const publicData = await publicResponse.json();
+        return {
+          ciphertext: publicData.ciphertext,
+          iv: publicData.iv,
+          tag: publicData.tag,
+        };
+      }
+      
+      throw new Error(
+        `Error al obtener datos de IPFS: HTTP ${response.status} - ${response.statusText}`
+      );
+    }
+    
+    // 3. Parsear el JSON
+    const data = await response.json();
+    
+    // 4. Validar que tenga los campos necesarios
+    if (!data.ciphertext || !data.iv || !data.tag) {
+      throw new Error(
+        'Los datos obtenidos de IPFS no tienen el formato esperado (faltan ciphertext, iv o tag)'
+      );
+    }
+    
+    return {
+      ciphertext: data.ciphertext,
+      iv: data.iv,
+      tag: data.tag,
+    };
+  } catch (error) {
+    throw new Error(
+      `Error al obtener datos de IPFS: ${error instanceof Error ? error.message : 'Error desconocido'}`
     );
   }
 }

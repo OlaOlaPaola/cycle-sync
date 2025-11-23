@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { usePrivySafe } from '../../hooks/usePrivySafe';
+import { useLoginWithEmail } from '@privy-io/react-auth';
 import { PRIVY_APP_ID } from '../../config/privy';
 import styles from './ConfirmationScreen.module.css';
 
@@ -10,11 +11,14 @@ interface ConfirmationScreenProps {
 }
 
 const ConfirmationScreen = ({ email, onBack, onBypass }: ConfirmationScreenProps) => {
-  const { login } = usePrivySafe();
+  const { ready, authenticated } = usePrivySafe();
   const hasPrivy = PRIVY_APP_ID && PRIVY_APP_ID.trim() !== '';
   const [code, setCode] = useState<string[]>(['', '', '', '', '', '']);
   const [isSuccess, setIsSuccess] = useState(false);
   const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
+  
+  // Usar hook específico de Privy v3 para login con email
+  const { loginWithCode, sendCode: resendEmailCode, state: emailState } = useLoginWithEmail();
 
   useEffect(() => {
     // Focus en el primer input al montar
@@ -75,13 +79,10 @@ const ConfirmationScreen = ({ email, onBack, onBypass }: ConfirmationScreenProps
     }
     
     try {
-      // Privy maneja la verificación del código automáticamente
-      // Cuando el usuario completa el código, Privy lo verifica
-      await (login as any)({
-        method: 'email',
-        email: email,
-        verificationCode: verificationCode,
-      });
+      // En Privy v3, usar loginWithCode para verificar el código OTP
+      await loginWithCode({ code: verificationCode });
+      // Si no hay error, Privy habrá autenticado al usuario
+      setIsSuccess(true);
     } catch (error) {
       console.error('Error verificando código:', error);
       // Si hay error, limpiar el código para que el usuario pueda intentar de nuevo
@@ -100,11 +101,8 @@ const ConfirmationScreen = ({ email, onBack, onBypass }: ConfirmationScreenProps
     setCode(['', '', '', '', '', '']);
     setIsSuccess(false);
     try {
-      // Solicitar un nuevo código de Privy
-      await (login as any)({
-        method: 'email',
-        email: email,
-      });
+      // En Privy v3, usar sendCode para reenviar el código
+      await resendEmailCode({ email });
       inputRefs.current[0]?.focus();
     } catch (error) {
       console.error('Error reenviando código:', error);

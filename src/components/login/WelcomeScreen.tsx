@@ -1,5 +1,6 @@
 import { usePrivySafe } from '../../hooks/usePrivySafe';
 import { useDemoAuth } from '../../contexts/DemoAuthContext';
+import { useLoginWithOAuth } from '@privy-io/react-auth';
 import { PRIVY_APP_ID } from '../../config/privy';
 import styles from './WelcomeScreen.module.css';
 
@@ -10,9 +11,12 @@ interface WelcomeScreenProps {
 }
 
 const WelcomeScreen = ({ onGetStarted, onAlreadyHaveAccount, onBypass }: WelcomeScreenProps) => {
-  const { login } = usePrivySafe();
+  const { ready, authenticated } = usePrivySafe();
   const { timeRemaining } = useDemoAuth();
   const hasPrivy = PRIVY_APP_ID && PRIVY_APP_ID.trim() !== '';
+  
+  // Usar hook específico de Privy v3 para OAuth
+  const { initOAuth } = useLoginWithOAuth();
   
   const formatTime = (ms: number | null) => {
     if (!ms) return '';
@@ -28,9 +32,7 @@ const WelcomeScreen = ({ onGetStarted, onAlreadyHaveAccount, onBypass }: Welcome
     }
     
     try {
-      await (login as any)({
-        method: 'google',
-      });
+      await initOAuth({ provider: 'google' });
     } catch (error) {
       console.error('Error en login con Google:', error);
     }

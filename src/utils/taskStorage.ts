@@ -8,6 +8,11 @@
 import { Task } from '../types';
 import { encryptUserData } from './encryption';
 import { uploadToIPFS } from './ipfs';
+import {
+  saveEncryptedDataToSupabase,
+  updateEncryptedDataInSupabase,
+} from './supabaseStorage';
+import { isSupabaseConfigured } from '../config/supabase';
 
 /**
  * Interfaz para el resultado de guardar una tarea
@@ -17,6 +22,9 @@ export interface TaskStorageResult {
   size: number;
   aesKey: string;
   taskId: string;
+  iv: string; // IV en base64
+  tag: string; // Tag de autenticación en base64
+  supabaseId?: string; // ID del registro en Supabase (si se guardó)
 }
 
 /**
@@ -76,12 +84,33 @@ export async function saveTaskToIPFS(
       tag: encrypted.tag,
     });
 
-    // 5. Retornar resultado
+    // 5. Guardar en Supabase si está configurado
+    let supabaseId: string | undefined;
+    if (isSupabaseConfigured()) {
+      try {
+        const supabaseResult = await updateEncryptedDataInSupabase(
+          userId, // privyUserId
+          ipfsResult.cid,
+          encrypted.aesKey,
+          encrypted.iv,
+          encrypted.tag
+        );
+        supabaseId = supabaseResult.id.toString();
+      } catch (error) {
+        console.error('⚠️ Error al guardar tarea en Supabase (continuando):', error);
+        // Continuar sin fallar si Supabase falla
+      }
+    }
+
+    // 6. Retornar resultado
     return {
       cid: ipfsResult.cid,
       size: ipfsResult.size,
       aesKey: encrypted.aesKey,
       taskId: task.id,
+      iv: encrypted.iv,
+      tag: encrypted.tag,
+      supabaseId,
     };
   } catch (error) {
     throw new Error(
@@ -120,7 +149,7 @@ export async function saveTasksToIPFS(
 
 /**
  * Guarda los metadatos de una tarea en localStorage
- * (En producción, esto debe ir al backend)
+ * (También se guarda en Supabase si está configurado)
  */
 export function saveTaskMetadataLocally(
   userId: string,
