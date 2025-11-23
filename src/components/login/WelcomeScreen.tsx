@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { usePrivySafe } from '../../hooks/usePrivySafe';
 import { useDemoAuth } from '../../contexts/DemoAuthContext';
 import { useLoginWithOAuth } from '@privy-io/react-auth';
@@ -14,6 +15,8 @@ const WelcomeScreen = ({ onGetStarted, onAlreadyHaveAccount, onBypass }: Welcome
   const { ready, authenticated } = usePrivySafe();
   const { timeRemaining } = useDemoAuth();
   const hasPrivy = PRIVY_APP_ID && PRIVY_APP_ID.trim() !== '';
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   
   // Usar hook específico de Privy v3 para OAuth
   const { initOAuth } = useLoginWithOAuth();
@@ -31,11 +34,42 @@ const WelcomeScreen = ({ onGetStarted, onAlreadyHaveAccount, onBypass }: Welcome
       return;
     }
     
-    try {
-      await initOAuth({ provider: 'google' });
-    } catch (error) {
-      console.error('Error en login con Google:', error);
+    if (!ready) {
+      setError('Privy aún no está listo. Por favor, espera un momento e intenta de nuevo.');
+      return;
     }
+    
+    setLoading(true);
+    setError(null);
+    try {
+      // Verificar que initOAuth esté disponible
+      if (!initOAuth) {
+        throw new Error('OAuth no está disponible. Verifica la configuración en Privy Dashboard.');
+      }
+      
+      // initOAuth redirige al usuario a la página de OAuth de Google
+      // El flujo se completa automáticamente cuando el usuario autoriza
+      await initOAuth({ provider: 'google' });
+    } catch (error: any) {
+      console.error('Error en login con Google:', error);
+      
+      // Mensajes de error más específicos
+      let errorMessage = 'Error al iniciar sesión con Google.';
+      
+      if (error?.message) {
+        if (error.message.includes('not allowed') || error.message.includes('not enabled')) {
+          errorMessage = 'Login con Google no está habilitado. Por favor, configura Google OAuth en el Privy Dashboard.';
+        } else if (error.message.includes('not configured')) {
+          errorMessage = 'Google OAuth no está configurado. Por favor, configura las credenciales en el Privy Dashboard.';
+        } else {
+          errorMessage = error.message;
+        }
+      }
+      
+      setError(errorMessage);
+      setLoading(false);
+    }
+    // Nota: No establecemos loading a false aquí porque el usuario será redirigido
   };
 
   return (
@@ -68,13 +102,31 @@ const WelcomeScreen = ({ onGetStarted, onAlreadyHaveAccount, onBypass }: Welcome
           </p>
         </div>
 
+        {error && (
+          <div style={{ 
+            padding: '12px', 
+            margin: '12px 0', 
+            backgroundColor: '#fee', 
+            color: '#c33', 
+            borderRadius: '8px',
+            fontSize: '14px',
+            textAlign: 'center'
+          }}>
+            {error}
+          </div>
+        )}
+
         <div className={styles.ctaButtons}>
-          <button className={styles.btnPrimary} onClick={onGetStarted}>
+          <button className={styles.btnPrimary} onClick={onGetStarted} disabled={loading}>
             Get Started
           </button>
-          <button className={styles.btnSecondary} onClick={handleGoogleLogin}>
+          <button 
+            className={styles.btnSecondary} 
+            onClick={handleGoogleLogin}
+            disabled={loading}
+          >
             <span className={styles.googleIcon}>G</span>
-            Already Have Account?
+            {loading ? 'Conectando...' : 'Already Have Account?'}
           </button>
         </div>
 
