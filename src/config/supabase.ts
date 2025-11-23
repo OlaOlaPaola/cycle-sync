@@ -11,6 +11,7 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
 // URL de Supabase desde variables de entorno
+export const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL?.trim() || '';
 
 // Clave anónima desde variables de entorno
 export const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY?.trim() || '';
